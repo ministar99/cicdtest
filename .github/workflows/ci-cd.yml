@@ -1,61 +1,61 @@
-name: CI/CD Pipeline
+name: React Frontend Deploy
 
 on:
   push:
     branches: [ main ]
 
-env:
-  PYTHON_VERSION: '3.11'
-  FASTAPI_DIR: /home/ubuntu/FastAPI
-  VENV_DIR: /home/ubuntu/FastAPI/.venv
-  FASTAPI_PORT: 8000
-
 jobs:
-  deploy_and_test:
+  build-and-deploy:
     runs-on: ubuntu-latest
     steps:
-      - name: Deploy & Test via Bastion
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      # 1. 빌드 (React 프로젝트 빌드)
+      - name: Install and Build
+        run: |
+          npm install
+          npm run build 
+
+      # 2. 빌드된 파일(dist/*)을 Nginx 서버로 전송
+      # appleboy/scp-action은 Bastion을 거쳐 내부망 서버로 직접 전송을 지원합니다.
+      - name: SCP files via Bastion
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.BASTION_IP }}
+          username: ubuntu
+          key: ${{ secrets.EC2_SSH_KEY }}
+          # 타겟 서버(Nginx 서버) 정보
+          proxy_host: ${{ secrets.BASTION_IP }}
+          proxy_username: ubuntu
+          proxy_key: ${{ secrets.EC2_SSH_KEY }}
+          
+          source: "dist/*"  # Vite 사용 시 dist, Create React App 사용 시 build
+          target: "/home/ubuntu/react_temp" # 우선 권한이 있는 홈 디렉토리에 전송
+          strip_components: 1
+
+      # 3. 임시 폴더에서 /var/www/react로 이동 (권한 해결)
+      - name: Move files to Nginx Root
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.BASTION_IP }}
           username: ubuntu
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
-            echo "=== Deploy to FastAPI (via Bastion) ==="
-            
-            # SSH Jump Host 설정을 사용하여 내부 서버 접속
-            ssh -o StrictHostKeyChecking=no \
-                -J ubuntu@${{ secrets.BASTION_IP }} \
-                ubuntu@${{ secrets.FASTAPI_PRIVATE_IP }} << 'EOF'
-              set -e
-              cd /home/ubuntu/testfast
-
-              echo "1. Git pull"
-              git pull origin main
-
-              echo "2. Activate venv"
-              source venv/bin/activate
-
-              echo "3. Install requirements"
-              pip install -r requirements.txt
-
-              echo "4. Restart FastAPI"
-              sudo fuser -k 8000/tcp || true
-              nohup uvicorn app.main:app --host 0.0.0.0 --port 8000 > server.log 2>&1 &
-
-              sleep 3
-
-              echo "5. Local FastAPI health check"
-              curl -f http://127.0.0.1:8000/ || exit 1
-            
+            ssh -o StrictHostKeyChecking=no -J ubuntu@${{ secrets.BASTION_IP }} ubuntu@${{ secrets.NGINX_PRIVATE_IP }} << 'EOF'
+              # 기존 파일 삭제 및 새 파일 복사
+              sudo rm -rf /var/www/react/*
+              sudo cp -r /home/ubuntu/react_temp/* /var/www/react/
+              
+              # 임시 파일 삭제
+              rm -rf /home/ubuntu/react_temp
+              
+              # Nginx 설정 확인 및 재시작 (선택 사항)
+              sudo nginx -t && sudo systemctl reload nginx
             EOF
-
-            echo "=== FastAPI OK ==="
-
-            echo "=== Nginx → FastAPI Test ==="
-            # / 제거 수정됨
-            ssh -o StrictHostKeyChecking=no ubuntu@${{ secrets.NGINX_PUBLIC_IP }} \
-              "curl -f http://${{ secrets.FASTAPI_PRIVATE_IP }}:8000"
-
-            echo "=== Domain Health Check ==="
-            curl -f http://starmin.shop/health
