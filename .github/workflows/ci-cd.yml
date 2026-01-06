@@ -14,19 +14,19 @@ jobs:
   deploy_and_test:
     runs-on: ubuntu-latest
     steps:
-      name: Deploy & Test via Bastion
-      uses: appleboy/ssh-action@v1.0.3
-      with:
-        host: ${{ secrets.BASTION_IP }}
-        username: ubuntu
-        key: ${{ secrets.EC2_SSH_KEY }}
-        script: |
-         echo "=== Deploy to FastAPI (via Bastion) ==="
-
+      - name: Deploy & Test via Bastion
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.BASTION_IP }}
+          username: ubuntu
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            echo "=== Deploy to FastAPI (via Bastion) ==="
+            
+            # SSH Jump Host 설정을 사용하여 내부 서버 접속
             ssh -o StrictHostKeyChecking=no \
                 -J ubuntu@${{ secrets.BASTION_IP }} \
                 ubuntu@${{ secrets.FASTAPI_PRIVATE_IP }} << 'EOF'
-
               set -e
               cd /home/ubuntu/testfast
 
@@ -47,14 +47,15 @@ jobs:
 
               echo "5. Local FastAPI health check"
               curl -f http://127.0.0.1:8000/ || exit 1
-
+            
             EOF
 
             echo "=== FastAPI OK ==="
 
             echo "=== Nginx → FastAPI Test ==="
-            ssh ubuntu@${{ secrets.NGINX_PUBLIC_IP }} \
-              "curl -f http://${{/ secrets.FASTAPI_PRIVATE_IP }}:8000"
+            # / 제거 수정됨
+            ssh -o StrictHostKeyChecking=no ubuntu@${{ secrets.NGINX_PUBLIC_IP }} \
+              "curl -f http://${{ secrets.FASTAPI_PRIVATE_IP }}:8000"
 
             echo "=== Domain Health Check ==="
             curl -f http://starmin.shop/health
