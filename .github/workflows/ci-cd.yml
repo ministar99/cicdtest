@@ -1,0 +1,60 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main ]
+
+env:
+  PYTHON_VERSION: '3.11'
+  FASTAPI_DIR: /home/ubuntu/FastAPI
+  VENV_DIR: /home/ubuntu/FastAPI/.venv
+  FASTAPI_PORT: 8000
+
+jobs:
+  deploy_and_test:
+    runs-on: ubuntu-latest
+    steps:
+      name: Deploy & Test via Bastion
+      uses: appleboy/ssh-action@v1.0.3
+      with:
+        host: ${{ secrets.BASTION_IP }}
+        username: ubuntu
+        key: ${{ secrets.EC2_SSH_KEY }}
+        script: |
+         echo "=== Deploy to FastAPI (via Bastion) ==="
+
+            ssh -o StrictHostKeyChecking=no \
+                -J ubuntu@${{ secrets.BASTION_IP }} \
+                ubuntu@${{ secrets.FASTAPI_PRIVATE_IP }} << 'EOF'
+
+              set -e
+              cd /home/ubuntu/testfast
+
+              echo "1. Git pull"
+              git pull origin main
+
+              echo "2. Activate venv"
+              source venv/bin/activate
+
+              echo "3. Install requirements"
+              pip install -r requirements.txt
+
+              echo "4. Restart FastAPI"
+              sudo fuser -k 8000/tcp || true
+              nohup uvicorn app.main:app --host 0.0.0.0 --port 8000 > server.log 2>&1 &
+
+              sleep 3
+
+              echo "5. Local FastAPI health check"
+              curl -f http://127.0.0.1:8000/ || exit 1
+
+            EOF
+
+            echo "=== FastAPI OK ==="
+
+            echo "=== Nginx → FastAPI Test ==="
+            ssh ubuntu@${{ secrets.NGINX_PUBLIC_IP }} \
+              "curl -f http://${{/ secrets.FASTAPI_PRIVATE_IP }}:8000"
+
+            echo "=== Domain Health Check ==="
+            curl -f http://starmin.shop/health
